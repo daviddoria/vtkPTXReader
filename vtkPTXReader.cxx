@@ -30,6 +30,8 @@ vtkPTXReader::vtkPTXReader()
   this->SetNumberOfInputPorts(0);
 
   this->Output = vtkSmartPointer<vtkImageData>::New();
+  this->Output->SetNumberOfScalarComponents(3);
+  this->Output->SetScalarTypeToUnsignedChar();
 }
 
 void vtkPTXReader::ReadFile()
@@ -72,18 +74,13 @@ void vtkPTXReader::ReadFile()
 
   this->Output->ShallowCopy(reslice->GetOutput());
 
-  int totalPoints = numberOfPhiPoints * numberOfThetaPoints;
+  int totalPoints = numberOfThetaPoints * numberOfPhiPoints;
+
   vtkSmartPointer<vtkDoubleArray> coordinateArray =
     vtkSmartPointer<vtkDoubleArray>::New();
   coordinateArray->SetName("CoordinateArray");
   coordinateArray->SetNumberOfComponents(3);
   coordinateArray->SetNumberOfTuples(totalPoints);
-
-  vtkSmartPointer<vtkDoubleArray> normalArray =
-    vtkSmartPointer<vtkDoubleArray>::New();
-  normalArray->SetName("NormalArray");
-  normalArray->SetNumberOfComponents(3);
-  normalArray->SetNumberOfTuples(totalPoints);
 
   vtkSmartPointer<vtkIntArray> validArray =
     vtkSmartPointer<vtkIntArray>::New();
@@ -97,53 +94,56 @@ void vtkPTXReader::ReadFile()
   intensityArray->SetNumberOfComponents(1);
   intensityArray->SetNumberOfTuples(totalPoints);
 
-
-  for(unsigned int counter = 0; counter < numberOfPhiPoints*numberOfThetaPoints; counter++)
+  for(unsigned int theta = 0; theta < numberOfThetaPoints; theta++)
     {
-    //std::cout << "counter = " << counter << std::endl;
-    getline(infile, line);
-    //std::cout << "line: " << line << std::endl;
-
-    double coordinate[3];
-    double intensity;
-    double colorDouble[3];
-    //unsigned char colorChar[3];
-
-    std::stringstream parsedLine(line);
-    parsedLine >> coordinate[0] >> coordinate[1] >> coordinate[2] >> intensity
-               >> colorDouble[0] >> colorDouble[1] >> colorDouble[2];
-
-    // Compute the grid index from the linear index
-    unsigned int phi = counter / numberOfPhiPoints;
-    unsigned int theta = counter % numberOfPhiPoints;
-
-    //std::cout << "theta: " << theta << " phi: " << phi << std::endl;
-
-    // Set the point
-    coordinateArray->SetTupleValue(counter, coordinate);
-
-    intensityArray->SetValue(counter, intensity);
-    // Set the validity - the Leica HDS3000 scanner marks invalid points as "0 0 0 .5 0 0 0"
-    if(coordinate[0] == 0 && coordinate[1] == 0 && coordinate[2] == 0 && intensity == 0.50
-      && colorDouble[0] == 0 && colorDouble[1] == 0 && colorDouble[2] == 0)
+    for(unsigned int phi = 0; phi < numberOfPhiPoints; phi++)
       {
-      validArray->SetValue(counter, 0);
-      }
-    else
-      {
-      validArray->SetValue(counter, 1);
-      }
+      //std::cout << "counter = " << counter << std::endl;
+      getline(infile, line);
+      //std::cout << "line: " << line << std::endl;
 
-    unsigned char* pixel = static_cast<unsigned char*>(this->Output->GetScalarPointer(phi,theta,0));
-    pixel[0] = static_cast<unsigned char>(colorDouble[0]*255.);
-    pixel[1] = static_cast<unsigned char>(colorDouble[1]*255.);
-    pixel[2] = static_cast<unsigned char>(colorDouble[2]*255.);
+      double coordinate[3];
+      double intensity;
+      double colorInt[3];
 
-    }//end for
+      std::stringstream parsedLine(line);
+      parsedLine >> coordinate[0] >> coordinate[1] >> coordinate[2] >> intensity
+                 >> colorInt[0] >> colorInt[1] >> colorInt[2];
+
+      int gridIndex[3] = {theta, phi, 0};
+      vtkIdType linearIndex = this->Output->ComputePointId(gridIndex);
+
+      // Set the point
+      coordinateArray->SetTupleValue(linearIndex, coordinate);
+
+      intensityArray->SetValue(linearIndex, intensity);
+      // Set the validity - the Leica HDS3000 scanner marks invalid points as "0 0 0 .5 0 0 0"
+      if(coordinate[0] == 0 && coordinate[1] == 0 && coordinate[2] == 0 && intensity == 0.50
+        && colorInt[0] == 0 && colorInt[1] == 0 && colorInt[2] == 0)
+        {
+        validArray->SetValue(linearIndex, 0);
+        }
+      else
+        {
+        validArray->SetValue(linearIndex, 1);
+        }
+
+      unsigned char* pixel = static_cast<unsigned char*>(this->Output->GetScalarPointer(theta,phi,0));
+      /*
+      pixel[0] = static_cast<unsigned char>(colorInt[0]);
+      pixel[1] = static_cast<unsigned char>(colorInt[1]);
+      pixel[2] = static_cast<unsigned char>(colorInt[2]);
+      */
+      pixel[0] = colorInt[0];
+      pixel[1] = colorInt[1];
+      pixel[2] = colorInt[2];
+      //std::cout << "colorInt: " << colorInt[0] << " " << colorInt[1] << " " << colorInt[2] << " pixel: " << (int)pixel[0] << " " << (int)pixel[1] << " " << (int)pixel[2] << std::endl;
+
+      }//end phi for loop
+    }// end theta for loop
 
   this->Output->GetPointData()->AddArray(validArray);
   this->Output->GetPointData()->AddArray(coordinateArray);
-  this->Output->GetPointData()->AddArray(normalArray);
   this->Output->GetPointData()->AddArray(intensityArray);
 
   // Close the input file
@@ -177,20 +177,19 @@ void vtkPTXReader::GetValidOutputPoints(vtkPolyData* output)
   vtkSmartPointer<vtkPoints> points =
     vtkSmartPointer<vtkPoints>::New();
 
-  // Declare an array to store the normals
-  vtkSmartPointer<vtkDoubleArray> normals =
-    vtkSmartPointer<vtkDoubleArray>::New();
-  normals->SetNumberOfComponents(3);
-  normals->SetName("Normals");
-
   // Declare an array to store the intensities
   vtkSmartPointer<vtkDoubleArray> intensities =
     vtkSmartPointer<vtkDoubleArray>::New();
   intensities->SetNumberOfComponents(1);
   intensities->SetName("Intensities");
 
+  // Declare an array to store the colors
+  vtkSmartPointer<vtkUnsignedCharArray> colors =
+    vtkSmartPointer<vtkUnsignedCharArray>::New();
+  colors->SetNumberOfComponents(3);
+  colors->SetName("Colors");
+
   vtkIntArray* validArray = vtkIntArray::SafeDownCast(this->Output->GetPointData()->GetArray("ValidArray"));
-  vtkDoubleArray* normalArray = vtkDoubleArray::SafeDownCast(this->Output->GetPointData()->GetArray("NormalArray"));
   vtkDoubleArray* coordinateArray = vtkDoubleArray::SafeDownCast(this->Output->GetPointData()->GetArray("CoordinateArray"));
   vtkDoubleArray* intensityArray = vtkDoubleArray::SafeDownCast(this->Output->GetPointData()->GetArray("IntensityArray"));
 
@@ -205,22 +204,27 @@ void vtkPTXReader::GetValidOutputPoints(vtkPolyData* output)
       continue;
       }
 
+    // Coordinate
     double coordinate[3];
     coordinateArray->GetTupleValue(index, coordinate);
     points->InsertNextPoint(coordinate);
 
-    double normal[3];
-    normalArray->GetTupleValue(index, normal);
-    normals->InsertNextTupleValue(normal);
-
+    // Intensity
     intensities->InsertNextValue(intensityArray->GetValue(index));
+
+    // Color
+    int phi = index / dimensions[0];
+    int theta = index % dimensions[0];
+    int gridId[3] = {theta, phi, 0};
+    unsigned char* pixel = static_cast<unsigned char*>(this->Output->GetScalarPointer(theta,phi,0));
+    colors->InsertNextTupleValue(pixel);
   } //end for loop
 
   vtkSmartPointer<vtkPolyData> polydata =
     vtkSmartPointer<vtkPolyData>::New();
   polydata->SetPoints(points);
-  polydata->GetPointData()->SetNormals(normals);
   polydata->GetPointData()->AddArray(intensities);
+  polydata->GetPointData()->SetScalars(colors);
 
   vtkSmartPointer<vtkVertexGlyphFilter> glyphFilter =
     vtkSmartPointer<vtkVertexGlyphFilter>::New();
